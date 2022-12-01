@@ -21,6 +21,11 @@ using Color = System.Drawing.Color;
 using Point = System.Windows.Point;
 using SoundPlayer = System.Media.SoundPlayer;
 using NAudio.Wave;
+using ScottPlot;
+using static Accord.Math.FourierTransform;
+using AForge.Math;
+using Spectrogram;
+using System.Security.Cryptography.X509Certificates;
 
 namespace AudioVisualizationWPF
 {
@@ -354,6 +359,24 @@ namespace AudioVisualizationWPF
                 MessageBox.Show(ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
             }
 
+        }
+        private void PlotSegment(double[] audio, int duration, WpfPlot plot)
+        {
+            try
+            {
+                plot.Plot.Clear();
+                ScottPlot.Plottable.SignalPlot signal = plot.Plot.AddSignal(audio, file.sampleRate, System.Drawing.Color.Blue);
+                plot.Plot.Title("WAV File Data - Left Channel");
+                plot.Plot.XLabel("Time (seconds)");
+                plot.Plot.YLabel("Audio Value");
+                plot.Plot.AxisAuto(0);
+                plot.Plot.Benchmark(true);
+                plot.Refresh();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
         }
         private void PlotAudio(double[]? left, double[]? right, int duration)
         {
@@ -852,7 +875,17 @@ namespace AudioVisualizationWPF
                 MessageBox.Show(ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-
+        private List<double> GetSegmentFromTo(int from, int to)
+        {
+            List<double> result = new List<double>();
+            int indexFrom = (int)(from*currentL.Length) / (int)(audioFileDuration * 1000);
+            int indexTo = (int)(to * currentL.Length) / (int)(audioFileDuration * 1000);
+            for (int i = indexFrom; i <= indexTo; i++)
+            {
+                result.Add(currentL[i]);
+            }
+            return result;
+        }
         private void btnAddEcho_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -890,5 +923,137 @@ namespace AudioVisualizationWPF
             }
             
         }
+        private double[] HammingPeriodic(int width)
+        {
+            const double a = 0.53836;
+            const double b = -0.46164;
+
+            double phaseStep = (2.0 * Math.PI) / width;
+
+            var w = new double[width];
+            for (int i = 0; i < w.Length; i++)
+            {
+                w[i] = a + b * Math.Cos(i * phaseStep);
+            }
+            return w;
+        }
+        private void btnGetAudioFragment_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                int timeFrom = int.Parse(txtFrom.Text);
+                int timeTo = int.Parse(txtTo.Text);
+                if(timeFrom<0)
+                {
+                    throw new ArgumentException("Time from cannot be less than zero!");
+                }
+                if (timeTo/1000>audioFileDuration)
+                {
+                    throw new ArgumentException("Time to cannot be greater than audio file length!");
+                }
+                List<double> segment=GetSegmentFromTo(timeFrom, timeTo);
+                double[] arraySegment = segment.ToArray();
+                JsonOutput output = new JsonOutput();
+                output.nontransformed = arraySegment;
+                int length = segment.Count;
+                PlotSegment(arraySegment, timeTo - timeFrom,mainPlot5);
+                double[] hammingMultiplier = HammingPeriodic(length);
+                for (int i = 0; i < length; i++)
+                {
+                    arraySegment[i] = arraySegment[i] * hammingMultiplier[i];
+                }
+                
+                MathNet.Numerics.IntegralTransforms.Fourier.ForwardReal(arraySegment, segment.Count - 2);
+                PlotSegment(arraySegment, timeTo - timeFrom, mainPlot6);
+                for (int i = 0; i < arraySegment.Length; i++)
+                {
+                    arraySegment[i] = Math.Abs(arraySegment[i]);
+                }
+                List<double> cutArray=new List<double>();
+                if(arraySegment.Length%2==0)
+                {
+                    for (int i = 0; i < arraySegment.Length/2+1; i++)
+                    {
+                        cutArray.Add(arraySegment[i]);
+                    }
+                    for (int i = 1; i < cutArray.Count-1; i++)
+                    {
+                        cutArray[i] *= 2;
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < (arraySegment.Length+1)/2; i++)
+                    {
+                        cutArray.Add(arraySegment[i]);
+                    }
+                    for (int i = 1; i < cutArray.Count; i++)
+                    {
+                        cutArray[i] *= 2;
+                    }
+                }
+                Debug.WriteLine(file.sampleRate);
+                output.transformed = cutArray.ToArray();
+                output.sampleRate = file.sampleRate;
+                string strJson=Newtonsoft.Json.JsonConvert.SerializeObject(output);
+                Debug.WriteLine(strJson);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+                Debug.WriteLine(ex);
+            }
+            
+
+        }
+        public static void DFT(Complex[] data, Direction direction)
+        {
+            int n = data.Length;
+            double arg, cos, sin;
+            Complex[] dst = new Complex[n];
+
+            // for each destination element
+            for (int i = 0; i < n; i++)
+            {
+                dst[i] = Complex.Zero;
+
+                arg = -(int)direction * 2.0 * System.Math.PI * (double)i / (double)n;
+
+                // sum source elements
+                for (int j = 0; j < n; j++)
+                {
+                    cos = System.Math.Cos(j * arg);
+                    sin = System.Math.Sin(j * arg);
+
+                    dst[i].Re += (data[j].Re * cos - data[j].Im * sin);
+                    dst[i].Im += (data[j].Re * sin + data[j].Im * cos);
+                }
+            }
+
+            // copy elements
+            if (direction == Direction.Forward)
+            {
+                // devide also for forward transform
+                for (int i = 0; i < n; i++)
+                {
+                    data[i].Re = dst[i].Re / n;
+                    data[i].Im = dst[i].Im / n;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    data[i].Re = dst[i].Re;
+                    data[i].Im = dst[i].Im;
+                }
+            }
+        }
+    }
+    public class JsonOutput
+    {
+        public double[] transformed;
+        public double[] nontransformed;
+        public int sampleRate;
     }
 }

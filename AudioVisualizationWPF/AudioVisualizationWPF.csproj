@@ -9,9 +9,14 @@
 
   <ItemGroup>
     <PackageReference Include="Accord.Math" Version="3.8.0" />
+    <PackageReference Include="AForge" Version="2.2.5" />
+    <PackageReference Include="AForge.Math" Version="2.2.5" />
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
     <PackageReference Include="NAudio.Core" Version="2.1.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="ScottPlot" Version="4.1.58" />
     <PackageReference Include="ScottPlot.WPF" Version="4.1.58" />
+    <PackageReference Include="Spectrogram" Version="1.6.1" />
   </ItemGroup>
 
 </Project>
