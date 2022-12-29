@@ -702,16 +702,16 @@ namespace AudioVisualizationWPF
             double[] result = new double[signal.Length];
             if(signal.Length%2==0)
             {
-                for (int i = 0; i < signal.Length-1; i++)
+                for (int i = 1; i < signal.Length-1; i++)
                 {
-                    result[i] = signal[i]*2/1000000;
+                    result[i] = signal[i]*2;
                 }
             }
             else
             {
-                for (int i = 0; i < signal.Length; i++)
+                for (int i = 1; i < signal.Length; i++)
                 {
-                    result[i] = signal[i] * 2 / 1000000;
+                    result[i] = signal[i] * 2;
                 }
             }
             return result;
@@ -766,46 +766,6 @@ namespace AudioVisualizationWPF
                 plottableSegment = ScaleSignal(SliceSignal(plottableSegment));
                 linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
                 PlotSegmentXY(plottableSegment, linspaced, mainPlot6);
-                //MathNet.Numerics.IntegralTransforms.Fourier.ForwardReal(arraySegment, segment.Count-2);
-
-                //for (int i = 0; i < arraySegment.Length; i++)
-                //{
-                //    arraySegment[i] = Math.Abs(arraySegment[i]);
-                //}
-
-
-                ////PlotSegment(ScaleSignal(SliceSignal(arraySegment)), timeTo - timeFrom, mainPlot6);
-                //double[] linspaced = Generate.LinearSpaced(SliceSignal(arraySegment).Length, 0, file.sampleRate / 2);
-                ////PlotSegmentXY(ScaleSignal(SliceSignal(arraySegment)), linspaced, mainPlot6);
-                //List<double> cutArray=new List<double>();
-                //if(arraySegment.Length%2==0)
-                //{
-                //    for (int i = 0; i < arraySegment.Length/2+1; i++)
-                //    {
-                //        cutArray.Add(arraySegment[i]);
-                //    }
-                //    for (int i = 1; i < cutArray.Count-1; i++)
-                //    {
-                //        cutArray[i] *= 2;
-                //    }
-                //}
-                //else
-                //{
-                //    for (int i = 0; i < (arraySegment.Length+1)/2; i++)
-                //    {
-                //        cutArray.Add(arraySegment[i]);
-                //    }
-                //    for (int i = 1; i < cutArray.Count; i++)
-                //    {
-                //        cutArray[i] *= 2;
-                //    }
-                //}
-                //Debug.WriteLine(file.sampleRate);
-                //output.transformed = cutArray.ToArray();
-                //output.sampleRate = file.sampleRate;
-                //string strJson=Newtonsoft.Json.JsonConvert.SerializeObject(output);
-                ////PlotSegment(output.transformed, timeTo - timeFrom, mainPlot6);
-                //Debug.WriteLine(strJson);
             }
             catch (Exception ex)
             {
