@@ -26,6 +26,11 @@ using static Accord.Math.FourierTransform;
 using AForge.Math;
 using Spectrogram;
 using System.Security.Cryptography.X509Certificates;
+using System.Runtime.Serialization.Formatters.Binary;
+using MathNet.Numerics;
+using Window = System.Windows.Window;
+using Newtonsoft.Json;
+using System.Net.Http;
 
 namespace AudioVisualizationWPF
 {
@@ -222,8 +227,6 @@ namespace AudioVisualizationWPF
         private string audioFilePath = string.Empty;
         private double audioFileDuration= double.NaN;
         private bool secondChannelExists = false;
-        private double[] currentEnergy = null;
-        private double[] currentZCR = null;
         private SoundPlayer currentSoundPlayer = null;
         private double[] currentL = null;
         private double[] currentR = null;
@@ -231,111 +234,6 @@ namespace AudioVisualizationWPF
         public MainWindow()
         {
             InitializeComponent();
-            cmbUnits.SelectedIndex = 0;
-        }
-        static bool readWav(string filename, out double[] L,
-            out double[] R, out int sampleRate, out int byteLength, out int byteRate)
-        {
-            L = R = null;
-            sampleRate = 0;
-            byteLength = 0;
-            byteRate = 0;
-            try
-            {
-                using (FileStream fs = File.Open(filename, FileMode.Open))
-                {
-                    BinaryReader reader = new BinaryReader(fs);
-
-                    // chunk 0
-                    int chunkID = reader.ReadInt32();
-                    int fileSize = reader.ReadInt32();
-                    int riffType = reader.ReadInt32();
-                    byteLength += 12;
-
-                    // chunk 1
-                    int fmtID = reader.ReadInt32();
-                    int fmtSize = reader.ReadInt32(); // bytes for this chunk (expect 16 or 18)
-                    byteLength += 8;
-
-                    // 16 bytes.
-                    int fmtCode = reader.ReadInt16();
-                    int channels = reader.ReadInt16();
-                    sampleRate = reader.ReadInt32();
-                    byteRate = reader.ReadInt32();
-                    int fmtBlockAlign = reader.ReadInt16();
-                    int bitDepth = reader.ReadInt16();
-                    byteLength += 16;
-
-                    if (fmtSize == 18)
-                    {
-                        int fmtExtraSize = reader.ReadInt16();
-                        reader.ReadBytes(fmtExtraSize);
-                        byteLength += fmtExtraSize;
-                    }
-
-                    // chunk 2
-                    int dataID = reader.ReadInt32();
-                    int bytes = reader.ReadInt32();
-                    byteLength += 8 + bytes;
-
-                    // data
-                    byte[] byteArray = reader.ReadBytes(bytes);
-
-                    int bytesForSamp = bitDepth / 8;
-                    int nValues = bytes / bytesForSamp;
-
-
-                    double[] asDouble = null;
-                    switch (bitDepth)
-                    {
-                        case 64:
-                            asDouble = new double[nValues];
-                            Buffer.BlockCopy(byteArray, 0, asDouble, 0, bytes);
-                            asDouble = Array.ConvertAll(asDouble, e => (double)e);
-                            break;
-                        case 32:
-                            asDouble = new double[nValues];
-                            Buffer.BlockCopy(byteArray, 0, asDouble, 0, bytes);
-                            break;
-                        case 16:
-                            Int16[]
-                                asInt16 = new Int16[nValues];
-                            Buffer.BlockCopy(byteArray, 0, asInt16, 0, bytes);
-                            asDouble = Array.ConvertAll(asInt16, e => e / (double)(Int16.MaxValue + 1));
-                            break;
-                        default:
-                            return false;
-                    }
-
-                    switch (channels)
-                    {
-                        case 1:
-                            L = asDouble;
-                            R = null;
-                            return true;
-                        case 2:
-                            // de-interleave
-                            int nSamps = nValues / 2;
-                            L = new double[nSamps];
-                            R = new double[nSamps];
-                            for (int s = 0, v = 0; s < nSamps; s++)
-                            {
-                                L[s] = asDouble[v++];
-                                R[s] = asDouble[v++];
-                            }
-                            return true;
-                        default:
-                            return false;
-                    }
-                }
-            }
-            catch
-            {
-                Debug.WriteLine("Failed to load: " + filename);
-                return false;
-            }
-
-            return false;
         }
         private void btnBrowseFile_Click(object sender, RoutedEventArgs e)
         {
@@ -360,13 +258,32 @@ namespace AudioVisualizationWPF
             }
 
         }
-        private void PlotSegment(double[] audio, int duration, WpfPlot plot)
+        private void PlotSegmentXY(double[] x, double[] y, WpfPlot plot, string plotName = "Plot")
+        {
+            try
+            {
+                plot.Plot.Clear();
+                ScottPlot.Plottable.ScatterPlot signal = plot.Plot.AddScatter(y, x, System.Drawing.Color.Blue);
+                plot.Plot.Title(plotName);
+                plot.Plot.XLabel("Time (seconds)");
+                plot.Plot.YLabel("Audio Value");
+                plot.Plot.AxisAuto(0);
+                plot.Plot.Benchmark(true);
+                plot.Refresh();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+        private void PlotSegment(double[] audio, int duration, WpfPlot plot,
+            string plotName="Plot")
         {
             try
             {
                 plot.Plot.Clear();
                 ScottPlot.Plottable.SignalPlot signal = plot.Plot.AddSignal(audio, file.sampleRate, System.Drawing.Color.Blue);
-                plot.Plot.Title("WAV File Data - Left Channel");
+                plot.Plot.Title(plotName);
                 plot.Plot.XLabel("Time (seconds)");
                 plot.Plot.YLabel("Audio Value");
                 plot.Plot.AxisAuto(0);
@@ -440,12 +357,6 @@ namespace AudioVisualizationWPF
                     audioFileDuration = (file.byteLength - 8) / file.byteRate;
                     Debug.WriteLine("Duration is " + audioFileDuration.ToString());
                     PlotAudio(file.leftChannel, file.rightChannel, file.sampleRate);
-                    ComputeFrames(file.leftChannel, audioFileDuration * 1000, 15, out List<double> energy);
-                    PlotEnergy(energy);
-                    Debug.WriteLine(String.Format("Energy has {0} elements", energy.Count));
-                    ComputeZeroCrossRate(file.leftChannel, audioFileDuration * 1000, 15, out List<double> zeroCross);
-                    PlotZeroCrossRate(zeroCross);
-                    Debug.WriteLine(String.Format("Zero Cross Rate has {0} elements", zeroCross.Count));
                 }
             }
             catch (Exception ex)
@@ -509,48 +420,6 @@ namespace AudioVisualizationWPF
             {
                 return -1;
             }
-        }
-        private void PlotEnergy(List<double> energy)
-        {
-            try
-            {
-                mainPlot3.Plot.Clear();
-                currentEnergy = energy.ToArray();
-                mainPlot3.Plot.AddSignal(currentEnergy, 1, System.Drawing.Color.Green);
-                
-                mainPlot3.Plot.Title("WAV File Data - Energy Diagram");
-                mainPlot3.Plot.XLabel("Frame Index");
-                mainPlot3.Plot.YLabel("Energy");
-                mainPlot3.Plot.AxisAuto(0);
-                mainPlot3.Plot.Benchmark(true);
-                mainPlot3.Render();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            
-        }
-
-        private void PlotZeroCrossRate(List<double> zeroCross)
-        {
-            try
-            {
-                mainPlot4.Plot.Clear();
-                currentZCR = zeroCross.ToArray();
-                mainPlot4.Plot.AddSignal(zeroCross.ToArray(), 1, System.Drawing.Color.Gold);
-                mainPlot4.Plot.Title("WAV File Data - Zero Cross Rate");
-                mainPlot4.Plot.XLabel("Frame Index");
-                mainPlot4.Plot.YLabel("Zero Cross Rate");
-                mainPlot4.Plot.AxisAuto(0);
-                mainPlot4.Plot.Benchmark(true);
-                mainPlot4.Render();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            
         }
 
         private void AddMarkerAtX(double x, bool addToSecondPlot=false)
@@ -680,64 +549,6 @@ namespace AudioVisualizationWPF
             }
             while (true);
         }
-        private void btnPlaceMarker_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(txtTimeMarker.Text))
-                {
-                    throw new ArgumentNullException("Time Marker", "Time Marker Text cannot be null!");
-                }
-                if (double.TryParse(txtTimeMarker.Text, out double markerTime))
-                {
-                    ComboBoxItem typeItem = (ComboBoxItem)cmbUnits.SelectedItem;
-                    string? units= typeItem.Content.ToString();
-                    double xToPlaceAt = -1;
-                    if (!string.IsNullOrWhiteSpace(units))
-                    {
-                        switch (units)
-                        {
-                            case "ms":
-                                {
-                                    xToPlaceAt = markerTime / 1000;
-                                    break;
-                                }
-                            case "min":
-                                {
-                                    xToPlaceAt = markerTime * 60;
-                                    break;
-                                }
-                            case "s":
-                                {
-                                    xToPlaceAt = markerTime;
-                                    break;
-                                }
-                        }
-                        if(xToPlaceAt<=audioFileDuration&&xToPlaceAt>=0)
-                        {
-                            AddMarkerAtX(xToPlaceAt);
-                            if(secondChannelExists)
-                            {
-                                AddMarkerAtX(xToPlaceAt,true);
-                            }
-                        }
-                        else
-                        {
-                            throw new ArgumentException("Time Marker", "Provided Time is not valid!");
-                        }
-                    }
-                }
-                else
-                {
-                    throw new ArgumentException("Time Marker", "Provided Time is not valid!");
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-
-        }
         private void ClearPlottables(ScottPlot.WpfPlot plot)
         {
             var plottables = plot.Plot.GetPlottables();
@@ -768,67 +579,6 @@ namespace AudioVisualizationWPF
         {
             var marker = plot.Plot.AddLine(value1, 0, value2, 0, System.Drawing.Color.Blue);
             plot.Render();
-        }
-        private void btnFindZCRSegments_Click(object sender, RoutedEventArgs e)
-        {
-            ClearPlottables(mainPlot4);
-            if(double.TryParse(txtFindZCRSegments.Text, out double minValue))
-            {
-                AddMarkerToPlot(mainPlot4, true, minValue, Color.Red);
-                int segmentStart = 0;
-                int segmentEnd = 0;
-                bool started = false;
-                for (int i = 0; i < currentZCR.Length; i++)
-                {
-                    if (currentZCR[i] >= minValue)
-                    {
-                        if (!started)
-                        {
-                            segmentStart = i;
-                            started = true;
-                        }
-                    }
-                    if (started && currentZCR[i] < minValue)
-                    {
-                        segmentEnd = i;
-                        started = false;
-                        AddMarkerToPlot(mainPlot4, false, segmentStart, Color.Blue);
-                        AddMarkerToPlot(mainPlot4, false, segmentEnd, Color.Blue);
-                        ConnectSegments(segmentStart, segmentEnd, minValue, mainPlot4);
-                    }
-                }
-            }
-        }
-
-        private void btnFindSegments_Click(object sender, RoutedEventArgs e)
-        {
-            ClearPlottables(mainPlot3);
-            if (double.TryParse(txtEnergyMinValue.Text, out double minValue))
-            {
-                AddMarkerToPlot(mainPlot3, true, minValue, Color.Red);
-                int segmentStart = 0;
-                int segmentEnd = 0;
-                bool started = false;
-                for (int i = 0; i < currentEnergy.Length; i++)
-                {
-                    if (currentEnergy[i] >= minValue)
-                    {
-                        if (!started)
-                        {
-                            segmentStart = i;
-                            started = true;
-                        }
-                    }
-                    if(started&&currentEnergy[i] < minValue)
-                    {
-                        segmentEnd = i;
-                        started = false;
-                        AddMarkerToPlot(mainPlot3, false, segmentStart,Color.Blue);
-                        AddMarkerToPlot(mainPlot3, false, segmentEnd,Color.Blue);
-                        ConnectSegments(segmentStart, segmentEnd, minValue, mainPlot3);
-                    }
-                }
-            }
         }
 
         private void btnPlayAudio_Click(object sender, RoutedEventArgs e)
@@ -875,67 +625,96 @@ namespace AudioVisualizationWPF
                 MessageBox.Show(ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-        private List<double> GetSegmentFromTo(int from, int to)
+        private List<double> GetSegmentFromTo(double[] array, int from, int to)
         {
             List<double> result = new List<double>();
-            int indexFrom = (int)(from*currentL.Length) / (int)(audioFileDuration * 1000);
-            int indexTo = (int)(to * currentL.Length) / (int)(audioFileDuration * 1000);
+            int indexFrom = (int)(from* array.Length) / (int)(audioFileDuration * 1000);
+            int indexTo = (int)(to * array.Length) / (int)(audioFileDuration * 1000);
             for (int i = indexFrom; i <= indexTo; i++)
             {
-                result.Add(currentL[i]);
+                result.Add(array[i]);
             }
             return result;
         }
-        private void btnAddEcho_Click(object sender, RoutedEventArgs e)
+        private T DeepClone<T>(T obj)
         {
-            try
+            using (var ms = new MemoryStream())
             {
-                double s = double.Parse(txtEchoCoef.Text);
-                double timeMarker = double.Parse(txtDeltaDistance.Text);
-                double deltaD = (timeMarker/1000) / audioFileDuration * file.leftChannel.Length;
-                int delta = (int)deltaD;
-                delta = (int)(timeMarker / 1000 * file.sampleRate);
-                for (int i = 0; i < file.leftChannel.Length; i++)
-                {
-                    if(i-delta>=0)
-                    {
-                        file.leftChannel[i] = file.leftChannel[i] + file.leftChannel[i - delta] * s;
-                        if (file.rightChannel!=null)
-                        {
-                            file.rightChannel[i] = file.rightChannel[i] + file.rightChannel[i - delta] * s;
-                        }
-                        
-                    }
-                    
-                }
-                PlotAudio(file.leftChannel, file.rightChannel, file.sampleRate);
-                ComputeFrames(file.leftChannel, audioFileDuration * 1000, 15, out List<double> energy);
-                PlotEnergy(energy);
-                Debug.WriteLine(String.Format("Energy has {0} elements", energy.Count));
-                ComputeZeroCrossRate(file.leftChannel, audioFileDuration * 1000, 15, out List<double> zeroCross);
-                PlotZeroCrossRate(zeroCross);
-                Debug.WriteLine(String.Format("Zero Cross Rate has {0} elements", zeroCross.Count));
-                
+                var formatter = new BinaryFormatter();
+                formatter.Serialize(ms, obj);
+                ms.Position = 0;
+
+                return (T)formatter.Deserialize(ms);
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message);
-            }
-            
         }
-        private double[] HammingPeriodic(int width)
+        private double[] SliceSignal(double[] signal)
         {
-            const double a = 0.53836;
-            const double b = -0.46164;
-
-            double phaseStep = (2.0 * Math.PI) / width;
-
-            var w = new double[width];
-            for (int i = 0; i < w.Length; i++)
+            int length = signal.Length;
+            int limit = 0;
+            if(length%2==0)
             {
-                w[i] = a + b * Math.Cos(i * phaseStep);
+                limit = length / 2 + 1;
             }
-            return w;
+            else
+            {
+                limit = (length + 1) / 2;
+            }
+            double[] result = new double[limit];
+            for (int i = 0; i < limit; i++)
+            {
+                result[i] = signal[i];
+            }
+            return result;
+        }
+        private double[] ClipArray(double[] array, double min, double max)
+        {
+            double[] result = new double[array.Length];
+            for (int i = 0; i < array.Length; i++)
+            {
+                double element = array[i];
+                if(element < min)
+                {
+                    element = min;
+                }
+                if(element > max)
+                {
+                    element = max;
+                }
+                result[i] = element;
+            }
+            return result;
+        }
+        private (double[], double[]) TransformAudio(double[] signal)
+        {
+            double[] arrayToClip = new double[signal.Length];
+            for (int i = 0; i < signal.Length; i++)
+            {
+                arrayToClip[i] = signal[i] * Math.Pow(2, file.bitDepth - 1);
+            }
+            double minimum = Math.Pow(-2, file.bitDepth - 1);
+            double maximum = Math.Pow(2, file.bitDepth - 1);
+            arrayToClip = ClipArray(arrayToClip, minimum, maximum);
+            double[] time = Generate.LinearSpaced(arrayToClip.Length, 0, file.duration);
+            return (arrayToClip, time);
+        }
+        private double[] ScaleSignal(double[] signal)
+        {
+            double[] result = new double[signal.Length];
+            if(signal.Length%2==0)
+            {
+                for (int i = 0; i < signal.Length-1; i++)
+                {
+                    result[i] = signal[i]*2/1000000;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < signal.Length; i++)
+                {
+                    result[i] = signal[i] * 2 / 1000000;
+                }
+            }
+            return result;
         }
         private void btnGetAudioFragment_Click(object sender, RoutedEventArgs e)
         {
@@ -951,52 +730,82 @@ namespace AudioVisualizationWPF
                 {
                     throw new ArgumentException("Time to cannot be greater than audio file length!");
                 }
-                List<double> segment=GetSegmentFromTo(timeFrom, timeTo);
+                (double[] transformed, double[] time) = TransformAudio(currentL);
+                List<double> segment=GetSegmentFromTo(transformed, timeFrom, timeTo);
                 double[] arraySegment = segment.ToArray();
                 JsonOutput output = new JsonOutput();
                 output.nontransformed = arraySegment;
+                
                 int length = segment.Count;
                 PlotSegment(arraySegment, timeTo - timeFrom,mainPlot5);
-                double[] hammingMultiplier = HammingPeriodic(length);
+                double[] hammingMultiplier = MathNet.Numerics.Window.HammingPeriodic(length);
                 for (int i = 0; i < length; i++)
                 {
                     arraySegment[i] = arraySegment[i] * hammingMultiplier[i];
                 }
+                double[] plottableSegment = DeepClone<double[]>(arraySegment);
                 
-                MathNet.Numerics.IntegralTransforms.Fourier.ForwardReal(arraySegment, segment.Count - 2);
-                PlotSegment(arraySegment, timeTo - timeFrom, mainPlot6);
-                for (int i = 0; i < arraySegment.Length; i++)
+                PlotSegment(plottableSegment, timeTo - timeFrom, mainPlot6);
+                string array = JsonConvert.SerializeObject(plottableSegment);
+                var url= "http://127.0.0.1:5000/fft";
+                var client = new HttpClient();
+                var content = new StringContent("{\"input\":" + array + "}",Encoding.UTF8,"application/json");
+                Task<HttpResponseMessage> task=client.PostAsync(url, content);
+                task.Wait();
+                var response = task.Result;
+                string stringToDeserialize = string.Empty;
+                if ((int)response.StatusCode==200)
                 {
-                    arraySegment[i] = Math.Abs(arraySegment[i]);
+                    var result = response.Content.ReadAsStringAsync().Result;
+                    string tempString = result[13..];
+                    stringToDeserialize = tempString.Remove(tempString.Length - 2);
                 }
-                List<double> cutArray=new List<double>();
-                if(arraySegment.Length%2==0)
-                {
-                    for (int i = 0; i < arraySegment.Length/2+1; i++)
-                    {
-                        cutArray.Add(arraySegment[i]);
-                    }
-                    for (int i = 1; i < cutArray.Count-1; i++)
-                    {
-                        cutArray[i] *= 2;
-                    }
-                }
-                else
-                {
-                    for (int i = 0; i < (arraySegment.Length+1)/2; i++)
-                    {
-                        cutArray.Add(arraySegment[i]);
-                    }
-                    for (int i = 1; i < cutArray.Count; i++)
-                    {
-                        cutArray[i] *= 2;
-                    }
-                }
-                Debug.WriteLine(file.sampleRate);
-                output.transformed = cutArray.ToArray();
-                output.sampleRate = file.sampleRate;
-                string strJson=Newtonsoft.Json.JsonConvert.SerializeObject(output);
-                Debug.WriteLine(strJson);
+                plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
+                double[] linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
+                PlotSegmentXY(plottableSegment, linspaced, mainPlot6);
+                plottableSegment = ScaleSignal(SliceSignal(plottableSegment));
+                linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
+                PlotSegmentXY(plottableSegment, linspaced, mainPlot6);
+                //MathNet.Numerics.IntegralTransforms.Fourier.ForwardReal(arraySegment, segment.Count-2);
+
+                //for (int i = 0; i < arraySegment.Length; i++)
+                //{
+                //    arraySegment[i] = Math.Abs(arraySegment[i]);
+                //}
+
+
+                ////PlotSegment(ScaleSignal(SliceSignal(arraySegment)), timeTo - timeFrom, mainPlot6);
+                //double[] linspaced = Generate.LinearSpaced(SliceSignal(arraySegment).Length, 0, file.sampleRate / 2);
+                ////PlotSegmentXY(ScaleSignal(SliceSignal(arraySegment)), linspaced, mainPlot6);
+                //List<double> cutArray=new List<double>();
+                //if(arraySegment.Length%2==0)
+                //{
+                //    for (int i = 0; i < arraySegment.Length/2+1; i++)
+                //    {
+                //        cutArray.Add(arraySegment[i]);
+                //    }
+                //    for (int i = 1; i < cutArray.Count-1; i++)
+                //    {
+                //        cutArray[i] *= 2;
+                //    }
+                //}
+                //else
+                //{
+                //    for (int i = 0; i < (arraySegment.Length+1)/2; i++)
+                //    {
+                //        cutArray.Add(arraySegment[i]);
+                //    }
+                //    for (int i = 1; i < cutArray.Count; i++)
+                //    {
+                //        cutArray[i] *= 2;
+                //    }
+                //}
+                //Debug.WriteLine(file.sampleRate);
+                //output.transformed = cutArray.ToArray();
+                //output.sampleRate = file.sampleRate;
+                //string strJson=Newtonsoft.Json.JsonConvert.SerializeObject(output);
+                ////PlotSegment(output.transformed, timeTo - timeFrom, mainPlot6);
+                //Debug.WriteLine(strJson);
             }
             catch (Exception ex)
             {
@@ -1005,49 +814,6 @@ namespace AudioVisualizationWPF
             }
             
 
-        }
-        public static void DFT(Complex[] data, Direction direction)
-        {
-            int n = data.Length;
-            double arg, cos, sin;
-            Complex[] dst = new Complex[n];
-
-            // for each destination element
-            for (int i = 0; i < n; i++)
-            {
-                dst[i] = Complex.Zero;
-
-                arg = -(int)direction * 2.0 * System.Math.PI * (double)i / (double)n;
-
-                // sum source elements
-                for (int j = 0; j < n; j++)
-                {
-                    cos = System.Math.Cos(j * arg);
-                    sin = System.Math.Sin(j * arg);
-
-                    dst[i].Re += (data[j].Re * cos - data[j].Im * sin);
-                    dst[i].Im += (data[j].Re * sin + data[j].Im * cos);
-                }
-            }
-
-            // copy elements
-            if (direction == Direction.Forward)
-            {
-                // devide also for forward transform
-                for (int i = 0; i < n; i++)
-                {
-                    data[i].Re = dst[i].Re / n;
-                    data[i].Im = dst[i].Im / n;
-                }
-            }
-            else
-            {
-                for (int i = 0; i < n; i++)
-                {
-                    data[i].Re = dst[i].Re;
-                    data[i].Im = dst[i].Im;
-                }
-            }
         }
     }
     public class JsonOutput
