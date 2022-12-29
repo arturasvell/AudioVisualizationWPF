@@ -295,41 +295,26 @@ namespace AudioVisualizationWPF
                 Debug.WriteLine(ex);
             }
         }
-        private void PlotAudio(double[]? left, double[]? right, int duration)
+        private void PlotAudio(double[]? array, int duration, WpfPlot plot, string plotName="Signal Vizualization - Left Channel",
+            string xLabel="Time (seconds)", string yLabel="Audio Value")
         {
             try
             {
-                mainPlot.Plot.Clear();
-                mainPlot2.Plot.Clear();
-                
-                ScottPlot.Plottable.SignalPlot signal = mainPlot.Plot.AddSignal(left, duration, System.Drawing.Color.Blue);
-                
-                if (right != null)
+                if(array == null)
                 {
-                    
-                    secondChannelExists = true;
-                    ScottPlot.Plottable.SignalPlot signal2 = mainPlot2.Plot.AddSignal(right, duration, System.Drawing.Color.Red);
-                    
+                    throw new ArgumentException("Signal is empty");
                 }
-                else
-                {
-                    secondChannelExists = false;
-                }
-                mainPlot.Plot.Title("WAV File Data - Left Channel");
-                mainPlot.Plot.XLabel("Time (seconds)");
-                mainPlot.Plot.YLabel("Audio Value");
-                mainPlot.Plot.AxisAuto(0);
-                mainPlot.Plot.Benchmark(true);
+                plot.Plot.Clear();
+                
+                plot.Plot.AddSignal(array, duration, System.Drawing.Color.Blue);
 
-                mainPlot2.Plot.Title("WAV File Data - Right Channel");
-                mainPlot2.Plot.XLabel("Time (seconds)");
-                mainPlot2.Plot.YLabel("Audio Value");
-                mainPlot2.Plot.AxisAuto(0);
-                mainPlot2.Plot.Benchmark(true);
+                plot.Plot.Title(plotName);
+                plot.Plot.XLabel(xLabel);
+                plot.Plot.YLabel(yLabel);
+                plot.Plot.AxisAuto(0);
+                plot.Plot.Benchmark(true);
 
-                mainPlot2.Render();
-
-                mainPlot.Render();
+                plot.Render();
             }
             catch (Exception ex)
             {
@@ -356,7 +341,8 @@ namespace AudioVisualizationWPF
 
                     audioFileDuration = (file.byteLength - 8) / file.byteRate;
                     Debug.WriteLine("Duration is " + audioFileDuration.ToString());
-                    PlotAudio(file.leftChannel, file.rightChannel, file.sampleRate);
+                    PlotAudio(file.leftChannel, file.sampleRate, SignalPlotLeft);
+                    
                 }
             }
             catch (Exception ex)
@@ -422,46 +408,26 @@ namespace AudioVisualizationWPF
             }
         }
 
-        private void AddMarkerAtX(double x, bool addToSecondPlot=false)
+        private void AddMarkerAtX(double x, WpfPlot plot)
         {
-            if(!addToSecondPlot)
+            var plottables = plot.Plot.GetPlottables();
+            for (int i = 0; i < plottables.Length; i++)
             {
-                var plottables = mainPlot.Plot.GetPlottables();
-                for (int i = 0; i < plottables.Length; i++)
+                if (plottables[i].GetType() == typeof(ScottPlot.Plottable.MarkerPlot))
                 {
-                    if (plottables[i].GetType() == typeof(ScottPlot.Plottable.MarkerPlot))
-                    {
-                        mainPlot.Plot.RemoveAt(i);
-                    }
+                    plot.Plot.RemoveAt(i);
                 }
-                var marker = mainPlot.Plot.AddMarker(x, -1, ScottPlot.MarkerShape.verticalBar, 1000, System.Drawing.Color.Red);
-                mainPlot.Render();
             }
-            else
-            {
-                if (secondChannelExists)
-                {
-                    var plottables = mainPlot2.Plot.GetPlottables();
-                    for (int i = 0; i < plottables.Length; i++)
-                    {
-                        if (plottables[i].GetType() == typeof(ScottPlot.Plottable.MarkerPlot))
-                        {
-                            mainPlot2.Plot.RemoveAt(i);
-                        }
-                    }
-                    var marker = mainPlot2.Plot.AddMarker(x, -1, ScottPlot.MarkerShape.verticalBar, 1000, System.Drawing.Color.Red);
-                    mainPlot2.Render();
-                }
-                
-            }
+            var marker = plot.Plot.AddMarker(x, -1, ScottPlot.MarkerShape.verticalBar, 1000, System.Drawing.Color.Red);
+            plot.Render();
         }
         private void mainPlot_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             try
             {
                 Point point = e.GetPosition(this);
-                double x = mainPlot.Plot.GetCoordinateX((float)point.X);
-                AddMarkerAtX(x);
+                double x = SignalPlotLeft.Plot.GetCoordinateX((float)point.X);
+                AddMarkerAtX(x,SignalPlotLeft);
             }
             catch (Exception ex)
             {
@@ -474,8 +440,8 @@ namespace AudioVisualizationWPF
             try
             {
                 Point point = e.GetPosition(this);
-                double x = mainPlot2.Plot.GetCoordinateX((float)point.X);
-                AddMarkerAtX(x,true);
+                double x = SubsignalLeft.Plot.GetCoordinateX((float)point.X);
+                AddMarkerAtX(x, SubsignalLeft);
             }
             catch (Exception ex)
             {
@@ -737,15 +703,15 @@ namespace AudioVisualizationWPF
                 output.nontransformed = arraySegment;
                 
                 int length = segment.Count;
-                PlotSegment(arraySegment, timeTo - timeFrom,mainPlot5);
+                PlotSegment(arraySegment, timeTo - timeFrom, SubsignalLeft,String.Format("Subsignal {0} Visualization",timeTo-timeFrom));
                 double[] hammingMultiplier = MathNet.Numerics.Window.HammingPeriodic(length);
+                double[] plottableSegment = DeepClone<double[]>(arraySegment);
                 for (int i = 0; i < length; i++)
                 {
-                    arraySegment[i] = arraySegment[i] * hammingMultiplier[i];
+                    plottableSegment[i] = plottableSegment[i] * hammingMultiplier[i];
                 }
-                double[] plottableSegment = DeepClone<double[]>(arraySegment);
                 
-                PlotSegment(plottableSegment, timeTo - timeFrom, mainPlot6);
+                
                 string array = JsonConvert.SerializeObject(plottableSegment);
                 var url= "http://127.0.0.1:5000/fft";
                 var client = new HttpClient();
@@ -762,10 +728,9 @@ namespace AudioVisualizationWPF
                 }
                 plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
                 double[] linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
-                PlotSegmentXY(plottableSegment, linspaced, mainPlot6);
                 plottableSegment = ScaleSignal(SliceSignal(plottableSegment));
                 linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
-                PlotSegmentXY(plottableSegment, linspaced, mainPlot6);
+                PlotSegmentXY(plottableSegment, linspaced, FrequencyDomainPlotLeft,"Frequency Domain");
             }
             catch (Exception ex)
             {
@@ -773,6 +738,11 @@ namespace AudioVisualizationWPF
                 Debug.WriteLine(ex);
             }
             
+
+        }
+
+        private void btnChangeAudio_Click(object sender, RoutedEventArgs e)
+        {
 
         }
     }
