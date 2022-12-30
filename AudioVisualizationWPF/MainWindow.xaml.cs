@@ -31,6 +31,7 @@ using MathNet.Numerics;
 using Window = System.Windows.Window;
 using Newtonsoft.Json;
 using System.Net.Http;
+using System.Windows.Media.Animation;
 
 namespace AudioVisualizationWPF
 {
@@ -231,6 +232,9 @@ namespace AudioVisualizationWPF
         private double[] currentL = null;
         private double[] currentR = null;
         private WAVFile? file = null;
+        private int timeFrom = 0;
+        private int timeTo = 0;
+        private double[] transformedSignal = null;
         public MainWindow()
         {
             InitializeComponent();
@@ -258,18 +262,20 @@ namespace AudioVisualizationWPF
             }
 
         }
-        private void PlotSegmentXY(double[] x, double[] y, WpfPlot plot, string plotName = "Plot")
+        private void PlotSegmentXY(double[] x, double[] y, WpfPlot plot, string plotName = "Plot", string xLabel="None", string yLabel="None")
         {
             try
             {
                 plot.Plot.Clear();
                 ScottPlot.Plottable.ScatterPlot signal = plot.Plot.AddScatter(y, x, System.Drawing.Color.Blue);
                 plot.Plot.Title(plotName);
-                plot.Plot.XLabel("Time (seconds)");
-                plot.Plot.YLabel("Audio Value");
+                plot.Plot.XLabel(xLabel);
+                plot.Plot.YLabel(yLabel);
+                plot.Plot.XAxis.TickDensity(3);
                 plot.Plot.AxisAuto(0);
-                plot.Plot.Benchmark(true);
+                plot.Plot.Benchmark(false);
                 plot.Refresh();
+                plot.Render();
             }
             catch (Exception ex)
             {
@@ -287,7 +293,7 @@ namespace AudioVisualizationWPF
                 plot.Plot.XLabel("Time (seconds)");
                 plot.Plot.YLabel("Audio Value");
                 plot.Plot.AxisAuto(0);
-                plot.Plot.Benchmark(true);
+                plot.Plot.Benchmark(false);
                 plot.Refresh();
             }
             catch (Exception ex)
@@ -312,7 +318,7 @@ namespace AudioVisualizationWPF
                 plot.Plot.XLabel(xLabel);
                 plot.Plot.YLabel(yLabel);
                 plot.Plot.AxisAuto(0);
-                plot.Plot.Benchmark(true);
+                plot.Plot.Benchmark(false);
 
                 plot.Render();
             }
@@ -342,7 +348,10 @@ namespace AudioVisualizationWPF
                     audioFileDuration = (file.byteLength - 8) / file.byteRate;
                     Debug.WriteLine("Duration is " + audioFileDuration.ToString());
                     PlotAudio(file.leftChannel, file.sampleRate, SignalPlotLeft);
-                    
+                    //FrequencyDomainPlotLeft.Plot.Clear();
+                    //ModifiedFrequencyPlotLeft.Plot.Clear();
+                    //FrequencyDomainPlotLeft.Render();
+                    //ModifiedFrequencyPlotLeft.Render();
                 }
             }
             catch (Exception ex)
@@ -682,12 +691,31 @@ namespace AudioVisualizationWPF
             }
             return result;
         }
+        private double[] ReverseScaleSignal(double[] signal)
+        {
+            double[] result = new double[signal.Length];
+            if (signal.Length % 2 == 0)
+            {
+                for (int i = 1; i < signal.Length - 1; i++)
+                {
+                    result[i] = signal[i] / 2;
+                }
+            }
+            else
+            {
+                for (int i = 1; i < signal.Length; i++)
+                {
+                    result[i] = signal[i] / 2;
+                }
+            }
+            return result;
+        }
         private void btnGetAudioFragment_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                int timeFrom = int.Parse(txtFrom.Text);
-                int timeTo = int.Parse(txtTo.Text);
+                timeFrom = int.Parse(txtFrom.Text);
+                timeTo = int.Parse(txtTo.Text);
                 if(timeFrom<0)
                 {
                     throw new ArgumentException("Time from cannot be less than zero!");
@@ -702,16 +730,22 @@ namespace AudioVisualizationWPF
                 JsonOutput output = new JsonOutput();
                 output.nontransformed = arraySegment;
                 
-                int length = segment.Count;
-                PlotSegment(arraySegment, timeTo - timeFrom, SubsignalLeft,String.Format("Subsignal {0} Visualization",timeTo-timeFrom));
-                double[] hammingMultiplier = MathNet.Numerics.Window.HammingPeriodic(length);
-                double[] plottableSegment = DeepClone<double[]>(arraySegment);
-                for (int i = 0; i < length; i++)
+                double[] subsignalForVisualisation = DeepClone(arraySegment);
+                PlotSegment(subsignalForVisualisation, timeTo - timeFrom, SubsignalLeft,String.Format("Subsignal ({0} ms length) Visualization",timeTo-timeFrom));
+
+
+
+
+                double[] hammingMultiplier = MathNet.Numerics.Window.Hamming(transformed.Length);
+                double[] plottableSegment = DeepClone<double[]>(transformed);
+                for (int i = 0; i < transformed.Length; i++)
                 {
                     plottableSegment[i] = plottableSegment[i] * hammingMultiplier[i];
                 }
                 
                 
+
+
                 string array = JsonConvert.SerializeObject(plottableSegment);
                 var url= "http://127.0.0.1:5000/fft";
                 var client = new HttpClient();
@@ -727,10 +761,11 @@ namespace AudioVisualizationWPF
                     stringToDeserialize = tempString.Remove(tempString.Length - 2);
                 }
                 plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
-                double[] linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
+                double[] linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate);
                 plottableSegment = ScaleSignal(SliceSignal(plottableSegment));
                 linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
-                PlotSegmentXY(plottableSegment, linspaced, FrequencyDomainPlotLeft,"Frequency Domain");
+                PlotSegmentXY(plottableSegment, linspaced, FrequencyDomainPlotLeft,"Frequency Domain", "Frequency (Hz)","Amplitude");
+                transformedSignal = plottableSegment;
             }
             catch (Exception ex)
             {
@@ -740,10 +775,118 @@ namespace AudioVisualizationWPF
             
 
         }
-
+        private int FrequencyToIndex(double frequency, int sampleRate, int length)
+        {
+            return Convert.ToInt32((double)(frequency / (double)((double)sampleRate / (double)length)));
+        }
+        private double[] AddAtFrequency(double frequency, double[] signal)
+        {
+            double[] result=DeepClone(signal);
+            int index = FrequencyToIndex(frequency, file.sampleRate/2, signal.Length);
+            if (result[index]!=signal.Max())
+                result[index] = signal.Max();
+            return result;
+        }
+        private double[] RemoveAtFrequency(double frequency, double[] signal)
+        {
+            double[] result = DeepClone(signal);
+            int index = FrequencyToIndex(frequency, file.sampleRate / 2, signal.Length);
+            if (result[index] != signal.Min())
+                result[index] = signal.Min();
+            return result;
+        }
         private void btnChangeAudio_Click(object sender, RoutedEventArgs e)
         {
+            string addAtFrequencyText = txtAddFrequency.Text;
+            string removeAtFrequencyText = txtRemoveFrequency.Text;
+            List<double> addAtFrequencies = new List<double>();
+            List<double> removeAtFrequencies = new List<double>();
+            if (!string.IsNullOrWhiteSpace(addAtFrequencyText))
+            {
+                string[] splitText=addAtFrequencyText.Split(',');
+                foreach (var item in splitText)
+                {
+                    addAtFrequencies.Add(double.Parse(item));
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(removeAtFrequencyText))
+            {
+                string[] splitText = removeAtFrequencyText.Split(',');
+                foreach (var item in splitText)
+                {
+                    removeAtFrequencies.Add(double.Parse(item));
+                }
+            }
+            double[] modifiedFrequency = null;
+            if (addAtFrequencies.Count>0)
+            {
+                foreach (var item in addAtFrequencies)
+                {
+                    modifiedFrequency = AddAtFrequency(item, transformedSignal);
+                    transformedSignal = modifiedFrequency;
+                }
+            }
+            if(removeAtFrequencies.Count>0)
+            {
+                foreach (var item in removeAtFrequencies)
+                {
+                    modifiedFrequency = RemoveAtFrequency(item, transformedSignal);
+                    transformedSignal = modifiedFrequency;
+                }
+            }
+            if(modifiedFrequency==null)
+            {
+                return;
+            }
+            double[] linspaced = Generate.LinearSpaced(modifiedFrequency.Length, 0, file.sampleRate / 2);
+            PlotSegmentXY(modifiedFrequency, linspaced, ModifiedFrequencyPlotLeft, "Modified Frequency Domain", "Frequency (Hz)", "Amplitude");
+        }
+        private double[] RestoreSignal(double[] modifiedSignal)
+        {
+            double[] result = modifiedSignal;
 
+            return result;
+
+        }
+        private void btnRestoreSignal_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string array = JsonConvert.SerializeObject(ReverseScaleSignal(transformedSignal));
+                var url = "http://127.0.0.1:5000/inverse_fft";
+                var client = new HttpClient();
+                var content = new StringContent("{\"input\":" + array +", \"sample_rate\":"+file.sampleRate+ "}", Encoding.UTF8, "application/json");
+                Task<HttpResponseMessage> task = client.PostAsync(url, content);
+                task.Wait();
+                var response = task.Result;
+                string stringToDeserialize = string.Empty;
+                if ((int)response.StatusCode == 200)
+                {
+                    var result = response.Content.ReadAsStringAsync().Result;
+                    string tempString = result[13..];
+                    stringToDeserialize = tempString.Remove(tempString.Length - 2);
+                }
+                double[] plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
+                double[] hammingMultiplier = MathNet.Numerics.Window.HammingPeriodic(plottableSegment.Length);
+                for (int i = 0; i < plottableSegment.Length; i++)
+                {
+                    plottableSegment[i] = plottableSegment[i] * hammingMultiplier[i];
+                }
+                double[] time = Generate.LinearSpaced(plottableSegment.Length, 0, file.duration*1000);
+                PlotSegmentXY(ReverseScaleSignal(plottableSegment), time, RestoredSignalLeft, String.Format("Restored Signal Visualization"),"Duration (ms)","Amplitude");
+
+                array = JsonConvert.SerializeObject(ReverseScaleSignal(plottableSegment));
+                url = "http://127.0.0.1:5000/gen_audio";
+                client = new HttpClient();
+                content = new StringContent("{\"input\":" + array + ", \"sample_rate\":" + file.sampleRate + "}", Encoding.UTF8, "application/json");
+                task = client.PostAsync(url, content);
+                task.Wait();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+            
         }
     }
     public class JsonOutput
