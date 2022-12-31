@@ -235,6 +235,7 @@ namespace AudioVisualizationWPF
         private int timeFrom = 0;
         private int timeTo = 0;
         private double[] transformedSignal = null;
+        private double[] signalSegment = null;
         public MainWindow()
         {
             InitializeComponent();
@@ -271,7 +272,7 @@ namespace AudioVisualizationWPF
                 plot.Plot.Title(plotName);
                 plot.Plot.XLabel(xLabel);
                 plot.Plot.YLabel(yLabel);
-                plot.Plot.XAxis.TickDensity(3);
+                plot.Plot.XAxis.TickDensity(2);
                 plot.Plot.AxisAuto(0);
                 plot.Plot.Benchmark(false);
                 plot.Refresh();
@@ -348,10 +349,6 @@ namespace AudioVisualizationWPF
                     audioFileDuration = (file.byteLength - 8) / file.byteRate;
                     Debug.WriteLine("Duration is " + audioFileDuration.ToString());
                     PlotAudio(file.leftChannel, file.sampleRate, SignalPlotLeft);
-                    //FrequencyDomainPlotLeft.Plot.Clear();
-                    //ModifiedFrequencyPlotLeft.Plot.Clear();
-                    //FrequencyDomainPlotLeft.Render();
-                    //ModifiedFrequencyPlotLeft.Render();
                 }
             }
             catch (Exception ex)
@@ -464,12 +461,11 @@ namespace AudioVisualizationWPF
         /// <param name="signal"></param>
         /// <param name="duration">Audio duration, in milliseconds</param>
         /// <param name="frameLength">Frame length, in milliseconds</param>
-        private void ComputeFrames(double[] signal, double duration, int frameLength, out List<double> energy)
+        private int GetFrameSize(double[] signal, double duration, int frameLength)
         {
-            double divider=duration/frameLength;
+            double divider=duration*1000/frameLength;
             double signalCount = signal.Length / divider;
             int signalCountCorrected = 0;
-            energy = new List<double>();
             while(true)
             {
                 if(Math.Ceiling(signalCount)%2!=0)
@@ -482,27 +478,8 @@ namespace AudioVisualizationWPF
                     break;
                 }
             }
-
-            for (int i = 0; i < signal.Length; i+=signalCountCorrected/2)
-            {
-                double sum = 0;
-                for (int j = i; j < i+signalCountCorrected; j++)
-                {
-                    if(j>=signal.Length)
-                    {
-                        break;
-                       
-                    }
-                    if (signal[j] != 0)
-                    {
-                        sum += Math.Pow(signal[j], 2);
-                    }
-
-                }
-                energy.Add((double)(1 / (double)signalCountCorrected) * sum);
-
-            }
-            Debug.WriteLine("Done");
+            Debug.WriteLine(signalCountCorrected);
+            return signalCountCorrected;
         }
         public static IEnumerable<int> Range(int start, int stop, int step = 1)
         {
@@ -710,6 +687,62 @@ namespace AudioVisualizationWPF
             }
             return result;
         }
+        private double[] CalculateIFFT(double[] input)
+        {
+            string array = JsonConvert.SerializeObject(input);
+            var url = "http://127.0.0.1:5000/inverse_fft";
+            var client = new HttpClient();
+            var content = new StringContent("{\"input\":" + array + ", \"sample_rate\":" + file.sampleRate + "}", Encoding.UTF8, "application/json");
+            Task<HttpResponseMessage> task = client.PostAsync(url, content);
+            task.Wait();
+            var response = task.Result;
+            string stringToDeserialize = string.Empty;
+            if ((int)response.StatusCode == 200)
+            {
+                var result = response.Content.ReadAsStringAsync().Result;
+                string tempString = result[13..];
+                stringToDeserialize = tempString.Remove(tempString.Length - 2);
+            }
+            double[] plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
+            double[] hammingMultiplier = MathNet.Numerics.Window.HammingPeriodic(plottableSegment.Length);
+            for (int j = 0; j < plottableSegment.Length; j++)
+            {
+                if (plottableSegment[j] != 0 && hammingMultiplier[j] != 0)
+                    plottableSegment[j] = plottableSegment[j] / hammingMultiplier[j];
+            }
+            return plottableSegment;
+        }
+        private double[] CalculateFFT(double[] input)
+        {
+            double[] hammingMultiplier = MathNet.Numerics.Window.Hamming(input.Length);
+            double[] plottableSegment = DeepClone<double[]>(input);
+            for (int i = 0; i < input.Length; i++)
+            {
+                plottableSegment[i] = plottableSegment[i] * hammingMultiplier[i];
+            }
+
+
+
+
+            string array = JsonConvert.SerializeObject(plottableSegment);
+            var url = "http://127.0.0.1:5000/fft";
+            var client = new HttpClient();
+            var content = new StringContent("{\"input\":" + array + ", \"sample_rate\":" + file.sampleRate + "}", Encoding.UTF8, "application/json");
+            Task<HttpResponseMessage> task = client.PostAsync(url, content);
+            task.Wait();
+            var response = task.Result;
+            string stringToDeserialize = string.Empty;
+            if ((int)response.StatusCode == 200)
+            {
+                var result = response.Content.ReadAsStringAsync().Result;
+                string tempString = result[13..];
+                stringToDeserialize = tempString.Remove(tempString.Length - 2);
+            }
+            plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
+            double[] linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate);
+            //plottableSegment = ScaleSignal(SliceSignal(plottableSegment));
+            return plottableSegment;
+        }
         private void btnGetAudioFragment_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -732,40 +765,11 @@ namespace AudioVisualizationWPF
                 
                 double[] subsignalForVisualisation = DeepClone(arraySegment);
                 PlotSegment(subsignalForVisualisation, timeTo - timeFrom, SubsignalLeft,String.Format("Subsignal ({0} ms length) Visualization",timeTo-timeFrom));
+                transformedSignal = transformed;
+                signalSegment = subsignalForVisualisation;
 
 
-
-
-                double[] hammingMultiplier = MathNet.Numerics.Window.Hamming(transformed.Length);
-                double[] plottableSegment = DeepClone<double[]>(transformed);
-                for (int i = 0; i < transformed.Length; i++)
-                {
-                    plottableSegment[i] = plottableSegment[i] * hammingMultiplier[i];
-                }
                 
-                
-
-
-                string array = JsonConvert.SerializeObject(plottableSegment);
-                var url= "http://127.0.0.1:5000/fft";
-                var client = new HttpClient();
-                var content = new StringContent("{\"input\":" + array + "}",Encoding.UTF8,"application/json");
-                Task<HttpResponseMessage> task=client.PostAsync(url, content);
-                task.Wait();
-                var response = task.Result;
-                string stringToDeserialize = string.Empty;
-                if ((int)response.StatusCode==200)
-                {
-                    var result = response.Content.ReadAsStringAsync().Result;
-                    string tempString = result[13..];
-                    stringToDeserialize = tempString.Remove(tempString.Length - 2);
-                }
-                plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
-                double[] linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate);
-                plottableSegment = ScaleSignal(SliceSignal(plottableSegment));
-                linspaced = Generate.LinearSpaced(plottableSegment.Length, 0, file.sampleRate / 2);
-                PlotSegmentXY(plottableSegment, linspaced, FrequencyDomainPlotLeft,"Frequency Domain", "Frequency (Hz)","Amplitude");
-                transformedSignal = plottableSegment;
             }
             catch (Exception ex)
             {
@@ -795,52 +799,7 @@ namespace AudioVisualizationWPF
                 result[index] = signal.Min();
             return result;
         }
-        private void btnChangeAudio_Click(object sender, RoutedEventArgs e)
-        {
-            string addAtFrequencyText = txtAddFrequency.Text;
-            string removeAtFrequencyText = txtRemoveFrequency.Text;
-            List<double> addAtFrequencies = new List<double>();
-            List<double> removeAtFrequencies = new List<double>();
-            if (!string.IsNullOrWhiteSpace(addAtFrequencyText))
-            {
-                string[] splitText=addAtFrequencyText.Split(',');
-                foreach (var item in splitText)
-                {
-                    addAtFrequencies.Add(double.Parse(item));
-                }
-            }
-            if (!string.IsNullOrWhiteSpace(removeAtFrequencyText))
-            {
-                string[] splitText = removeAtFrequencyText.Split(',');
-                foreach (var item in splitText)
-                {
-                    removeAtFrequencies.Add(double.Parse(item));
-                }
-            }
-            double[] modifiedFrequency = null;
-            if (addAtFrequencies.Count>0)
-            {
-                foreach (var item in addAtFrequencies)
-                {
-                    modifiedFrequency = AddAtFrequency(item, transformedSignal);
-                    transformedSignal = modifiedFrequency;
-                }
-            }
-            if(removeAtFrequencies.Count>0)
-            {
-                foreach (var item in removeAtFrequencies)
-                {
-                    modifiedFrequency = RemoveAtFrequency(item, transformedSignal);
-                    transformedSignal = modifiedFrequency;
-                }
-            }
-            if(modifiedFrequency==null)
-            {
-                return;
-            }
-            double[] linspaced = Generate.LinearSpaced(modifiedFrequency.Length, 0, file.sampleRate / 2);
-            PlotSegmentXY(modifiedFrequency, linspaced, ModifiedFrequencyPlotLeft, "Modified Frequency Domain", "Frequency (Hz)", "Amplitude");
-        }
+
         private double[] RestoreSignal(double[] modifiedSignal)
         {
             double[] result = modifiedSignal;
@@ -852,35 +811,78 @@ namespace AudioVisualizationWPF
         {
             try
             {
-                string array = JsonConvert.SerializeObject(ReverseScaleSignal(transformedSignal));
-                var url = "http://127.0.0.1:5000/inverse_fft";
-                var client = new HttpClient();
-                var content = new StringContent("{\"input\":" + array +", \"sample_rate\":"+file.sampleRate+ "}", Encoding.UTF8, "application/json");
-                Task<HttpResponseMessage> task = client.PostAsync(url, content);
-                task.Wait();
-                var response = task.Result;
-                string stringToDeserialize = string.Empty;
-                if ((int)response.StatusCode == 200)
-                {
-                    var result = response.Content.ReadAsStringAsync().Result;
-                    string tempString = result[13..];
-                    stringToDeserialize = tempString.Remove(tempString.Length - 2);
-                }
-                double[] plottableSegment = JsonConvert.DeserializeObject<double[]>(stringToDeserialize);
-                double[] hammingMultiplier = MathNet.Numerics.Window.HammingPeriodic(plottableSegment.Length);
-                for (int i = 0; i < plottableSegment.Length; i++)
-                {
-                    plottableSegment[i] = plottableSegment[i] * hammingMultiplier[i];
-                }
-                double[] time = Generate.LinearSpaced(plottableSegment.Length, 0, file.duration*1000);
-                PlotSegmentXY(ReverseScaleSignal(plottableSegment), time, RestoredSignalLeft, String.Format("Restored Signal Visualization"),"Duration (ms)","Amplitude");
+                int frameLengthMs = Convert.ToInt32(txtFrameLength.Text);
+                int frameSize=GetFrameSize(transformedSignal,file.duration,frameLengthMs);
+                double[] noiseFragment = DeepClone(signalSegment);
+                List<double> processedFragments = new List<double>();
 
-                array = JsonConvert.SerializeObject(ReverseScaleSignal(plottableSegment));
-                url = "http://127.0.0.1:5000/gen_audio";
-                client = new HttpClient();
-                content = new StringContent("{\"input\":" + array + ", \"sample_rate\":" + file.sampleRate + "}", Encoding.UTF8, "application/json");
-                task = client.PostAsync(url, content);
-                task.Wait();
+                double[] noiseSpectre = new double[frameSize];
+                for (int i = 0; i < frameSize; i++)
+                {
+                    noiseSpectre[i] = 0;
+                }
+                int step = 0;
+                for (int i = 0; i < noiseFragment.Length; i+=frameSize)
+                {
+                    if (i + 1 >= noiseFragment.Length)
+                    {
+                        break;
+
+                    }
+                    List<double> tempList=new List<double>();
+
+                    for (int j = i; j < i+frameSize; j++)
+                    {
+                        tempList.Add(noiseFragment[j]);
+                    }
+                    double[] fftCalculated = CalculateFFT(tempList.ToArray());
+                    for (int j = 0; j < frameSize; j++)
+                    {
+                        noiseSpectre[j] = noiseSpectre[j] + fftCalculated[j];
+                    }
+                    step++;
+                }
+                for (int i = 0; i < noiseSpectre.Length; i++)
+                {
+                    noiseSpectre[i] = noiseSpectre[i] / step;
+                }
+                for (int i = 0; i < transformedSignal.Length; i+=frameSize)
+                {
+                    if (i + 1 >= transformedSignal.Length)
+                    {
+                        break;
+
+                    }
+                    double[] signalValues = new double[frameSize];
+                    int counter = 0;
+                    
+                    for (int j = i; j < i+frameSize; j++)
+                    {
+                        signalValues[counter] = transformedSignal[j];
+                        counter++;
+                    }
+                    double[] calculatedFFT = CalculateFFT(signalValues);
+                    for (int j = 0; j < calculatedFFT.Length; j++)
+                    {
+                        calculatedFFT[j] -= noiseSpectre[j];
+                    }
+                    double[] plottableSegment = CalculateIFFT(calculatedFFT);
+                    foreach (var element in plottableSegment)
+                    {
+                        processedFragments.Add(element);
+                    }
+                }
+                
+                
+                double[] time = Generate.LinearSpaced(processedFragments.Count, 0, file.duration*1000);
+                PlotSegment(processedFragments.ToArray(), file.sampleRate, RestoredSignalLeft, String.Format("Restored Signal After Noise Removal"));
+
+                var array2 = JsonConvert.SerializeObject(processedFragments.ToArray());
+                var url2 = "http://127.0.0.1:5000/gen_audio";
+                var client2 = new HttpClient();
+                var content2 = new StringContent("{\"input\":" + array2 + ", \"sample_rate\":" + file.sampleRate + "}", Encoding.UTF8, "application/json");
+                var task2 = client2.PostAsync(url2, content2);
+                task2.Wait();
             }
             catch (Exception ex)
             {

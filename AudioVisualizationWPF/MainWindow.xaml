@@ -35,7 +35,7 @@
             <TextBox x:Name="txtFrom" Grid.Row="0" Grid.Column="1" Margin="5"/>
             <TextBlock Text="To:" Grid.Row="0" Grid.Column="2" TextWrapping="Wrap" TextAlignment="Center" VerticalAlignment="Center" Margin="5"/>
             <TextBox x:Name="txtTo" Grid.Row="0" Margin="5" Grid.Column="3"/>
-            <Button x:Name="btnGetAudioFragment" Grid.Row="0" Grid.Column="4" Margin="5" Content="Find Segments" Click="btnGetAudioFragment_Click"/>
+            <Button x:Name="btnGetAudioFragment" Grid.Row="0" Grid.Column="4" Margin="5" Content="Get Noise Fragment" Click="btnGetAudioFragment_Click"/>
         </Grid>
         <TabControl Grid.Row="2" Grid.ColumnSpan="3">
             <TabItem Header="Left Channel">
@@ -68,12 +68,9 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="Add Frequency:" Grid.Column="0" Margin="5"/>
-                        <TextBox Grid.Column="1" Margin="5" Name="txtAddFrequency"/>
-                        <TextBlock Text="Remove Frequency At:" Grid.Column="2" Margin="5"/>
-                        <TextBox Grid.Column="3" Margin="5" Name="txtRemoveFrequency"/>
-                        <Button x:Name="btnChangeAudio" Content="Perform Change" Click="btnChangeAudio_Click" Grid.Column="4" Margin="5"/>
-                        <Button x:Name="btnRestoreSignal" Content="Restore Signal" Grid.Column="5" Margin="5" Click="btnRestoreSignal_Click"/>
+                        <TextBlock Text="Frame Length:" Grid.Column="0" Margin="5"/>
+                        <TextBox Grid.Column="1" Margin="5" Name="txtFrameLength"/>
+                        <Button x:Name="btnRestoreSignal" Content="Remove Noise From Signal" Grid.Column="5" Margin="5" Click="btnRestoreSignal_Click"/>
                     </Grid>
 
 
